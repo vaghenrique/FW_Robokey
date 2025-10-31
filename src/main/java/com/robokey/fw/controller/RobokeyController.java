@@ -15,7 +15,7 @@ public class RobokeyController {
         this.service = service;
     }
 
-    @GetMapping("/status")
+    @GetMapping("/status")  
     public Status status() {
         return service.getStatus();
     }
