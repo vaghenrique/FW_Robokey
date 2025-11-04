@@ -3,6 +3,12 @@ package com.robokey.fw.service;
 import com.robokey.fw.model.Status;
 import com.robokey.fw.model.EnviarSegredoRequest;
 
+import org.springframework.scheduling.annotation.Scheduled;
+import com.fazecast.jSerialComm.SerialPort;
+import jakarta.annotation.PreDestroy;
+import java.io.OutputStream;
+import java.io.InputStream;
+
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -12,8 +18,58 @@ import org.springframework.stereotype.Service;
 public class RobokeyService {
 
     private boolean operacao = false;
-    private Status statusAtual = Status.Espera;
+    private Status statusAtual = Status.ConectandoUSB;
     private AtomicInteger progresso = new AtomicInteger(0);
+
+    private SerialPort portaSerial;
+    private OutputStream saidaSerial;
+    private InputStream entradaSerial;
+
+    // Esses identificadores devem garantir que qualquer placa com STM32 seja detectada pela USB
+    // no entanto não basta detectar a placa, para estabelecer conexão o protocolo deve ser implementado.
+    private static final int PLACA_VID = 1155;  // Vendor ID da placa do STM32
+    private static final int PLACA_PID = 22336; // Product ID da placa do STM32
+    private static final int baud_rate = 115200;
+
+    @Scheduled(fixedDelay = 3000)
+    public void detectarPlacaUSB()
+    {
+        if(portaSerial != null && portaSerial.isOpen())
+            return;
+
+        this.statusAtual = Status.ConectandoUSB;
+        this.portaSerial = null;
+
+        for(SerialPort port : SerialPort.getCommPorts())
+        {
+            int vid = port.getVendorID();
+            int pid = port.getProductID();
+
+            if(vid == PLACA_VID && pid == PLACA_PID)
+            {
+                portaSerial = port;
+                portaSerial.setBaudRate(baud_rate);
+
+                if(portaSerial.openPort())
+                {
+                    System.out.println("SUCESSO: Conectado ao controlador!");
+                    this.statusAtual = Status.Espera;
+                    this.saidaSerial = portaSerial.getOutputStream();
+                    break;
+                }
+                else
+                {
+                    System.err.println("Falha ao abrir a porta(talvez em uso ? ) tentando novamente em 3s");
+                    this.portaSerial = null;
+                }
+
+            }
+
+        }
+
+        
+
+    }
 
     public Status getStatus() {
         return statusAtual;

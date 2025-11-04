@@ -1,6 +1,7 @@
 package com.robokey.fw.model;
 
 public enum Status {
+    ConectandoUSB,
     Operacao,
     IniciandoMaquina,
     ValidandoChave,
