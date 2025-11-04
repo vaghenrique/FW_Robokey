@@ -1,24 +1,15 @@
 package com.robokey.fw.model;
 
-import java.util.List;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-public class EnviarSegredoRequest {
-    private List<String> pontos;
-    private String modeloChave;
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record EnviarSegredoRequest(
 
-    public List<String> getPontos() {
-        return pontos;
-    }
+    // Mapeia contour_points em ContourPoints
+    @JsonProperty("contour_points")
+    PontosContorno Contorno
+)
+{
 
-    public void setPontos(List<String> pontos) {
-        this.pontos = pontos;
-    }
-
-    public String getModeloChave() {
-        return modeloChave;
-    }
-
-    public void setModeloChave(String modeloChave) {
-        this.modeloChave = modeloChave;
-    }
 }

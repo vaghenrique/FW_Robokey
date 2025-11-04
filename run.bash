@@ -1,0 +1,1 @@
+cd /Users/macbookair/FW_Robokey ; /usr/bin/env /Users/macbookair/.vscode/extensions/redhat.java-1.47.0-darwin-x64/jre/21.0.8-macosx-x86_64/bin/java @/var/folders/mc/8n50y_494v37p61skhytd41m0000gn/T/cp_3mavchiss4vswkdqedtu1xhqh.argfile com.robokey.fw.FWRobokeyApplication

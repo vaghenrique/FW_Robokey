@@ -2,13 +2,16 @@ package com.robokey.fw.service;
 
 import com.robokey.fw.model.Status;
 import com.robokey.fw.model.EnviarSegredoRequest;
+import com.robokey.fw.model.Ponto;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import com.fazecast.jSerialComm.SerialPort;
 import jakarta.annotation.PreDestroy;
 import java.io.OutputStream;
+import java.io.BufferedReader;
 import java.io.InputStream;
-
+import java.io.InputStreamReader;
+import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -31,6 +34,9 @@ public class RobokeyService {
     private static final int PLACA_PID = 22336; // Product ID da placa do STM32
     private static final int baud_rate = 115200;
 
+    private static final int SERIAL_READ_TIEMEOUT_MS = 1000;
+    private static final int COMMAND_TIMEOUT_S = 5;
+
     @Scheduled(fixedDelay = 3000)
     public void detectarPlacaUSB()
     {
@@ -49,12 +55,14 @@ public class RobokeyService {
             {
                 portaSerial = port;
                 portaSerial.setBaudRate(baud_rate);
+                portaSerial.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, SERIAL_READ_TIEMEOUT_MS, 0);
 
                 if(portaSerial.openPort())
                 {
                     System.out.println("SUCESSO: Conectado ao controlador!");
                     this.statusAtual = Status.Espera;
                     this.saidaSerial = portaSerial.getOutputStream();
+                    this.entradaSerial = portaSerial.getInputStream();
                     break;
                 }
                 else
@@ -66,9 +74,6 @@ public class RobokeyService {
             }
 
         }
-
-        
-
     }
 
     public Status getStatus() {
@@ -76,10 +81,121 @@ public class RobokeyService {
     }
 
     public void enviarSegredo(EnviarSegredoRequest request) {
-        System.out.println("Modelo: " + request.getModeloChave());
-        System.out.println("Pontos: " + request.getPontos());
+        if(!isPronto())
+        {
+            System.err.println("Comando: 'enviarSegredo' ignorado: Placa não conectada");
+            return;
+        }
+
+        if(request.Contorno() == null || request.Contorno().topEdge() == null)
+        {
+            System.err.println("JSON inválido. 'contour_points' ou 'top_edge' não encontrados.");
+            return;
+        }
+
+        //Copia lista de pontos para a thread, isso libera as requisições HTTP
+        final var pontosParaEnviar = request.Contorno().topEdge();
+
+        Thread envioThread = new Thread( () -> {
+            boolean sucesso = executarProtocoloDeEnvio(pontosParaEnviar);
+            if(sucesso)
+                System.out.println("Protocolo de envio de pontos terminado com SUCESSO.");
+            else 
+                System.out.println("Protocolo de envio de pontos falhou");
+
+        });
+
+        envioThread.setDaemon(true);
+        envioThread.start();
+
         statusAtual = Status.Espera;
     }
+
+    private boolean executarProtocoloDeEnvio(java.util.List<Ponto> pontos)
+    {
+        if(!enviarEEsperarOk("START RECEIVING_CUT_PATH"))return false;
+        int i=0;
+        for(Ponto p : pontos){
+            i++;
+            String comandoPonto = String.format(Locale.US, "P %.4f %.4f", (double)p.x(), (double)p.y());
+            if(!enviarEEsperarOk(comandoPonto))
+            {
+                System.err.println("Falha ao enviar o ponto" + i+ ".Abortando.");
+                return false;
+            }
+        }
+
+        if(!enviarEEsperarOk("STOP RECEIVING_CUT_PATH")) return false;
+
+        return true;
+
+    }
+    private boolean enviarEEsperarOk(String comando)
+    {
+        if(portaSerial == null || saidaSerial == null || entradaSerial == null)
+        {
+            System.err.println("Porta serial não inicializada.");
+            this.statusAtual = Status.ConectandoUSB;
+            return false;
+        }
+
+        System.out.println(">> Enviando: " + comando);
+
+        try
+        {
+            // Limpa o buffer 
+            while(entradaSerial.available() > 0)
+                entradaSerial.read();
+
+            saidaSerial.write((comando + "\n").getBytes());
+            saidaSerial.flush();
+
+        }
+        catch(Exception e)
+        {
+            System.err.println("Falha crítica ao ESCREVER na porta");
+            e.printStackTrace(); // imprime o erro completo no console
+            this.statusAtual = Status.ConectandoUSB;
+            this.portaSerial = null;
+            return false;
+        }
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(this.entradaSerial));
+        long startTime= System.currentTimeMillis();
+
+        try
+        {
+            while(System.currentTimeMillis() - startTime < (COMMAND_TIMEOUT_S*1000) )
+            {
+                String linha = reader.readLine();
+
+                if(linha != null)
+                {
+                    linha = linha.trim();
+                    System.out.println("   <<" + linha);
+                    if(linha.contains("OK:"))
+                        return true;
+                    if(linha.contains("ERROR:"))
+                    {
+                        System.out.println("  Firmware reportou erro" + linha);
+                        return false;
+
+                    }
+                }
+            }
+        }
+        catch(java.io.IOError | java.io.IOException e)
+        {
+            System.err.println("Exceção ao LER da porta (placa desconectada ?)" + e.getMessage());
+            this.statusAtual = Status.ConectandoUSB;
+            this.portaSerial = null;
+            return false;
+        }
+        System.err.println("    Timeout! 'OK:' não recebido em " + COMMAND_TIMEOUT_S + "s.");
+
+        return false;
+    }
+
 
     public void pausarMaquina() {
         operacao = false;
@@ -115,6 +231,23 @@ public class RobokeyService {
         statusAtual = Status.ChaveON;
     }
 
+    // so garante que ja conectou a USB
+    private boolean isPronto()
+    {
+        return this.statusAtual != Status.ConectandoUSB;
+    }
+
+    // Limpa a porta ao desligar o servidor
+    @PreDestroy
+    public void desconectarDaPlaca()
+    {
+        if(portaSerial != null && portaSerial.isOpen())
+        {
+            portaSerial.closePort();
+            System.out.println("Porta serial fechada.");
+        }
+    }
+
     private void iniciarProgresso() {
         Thread progressoThread = new Thread(() -> {
             Random random = new Random();
@@ -143,3 +276,5 @@ public class RobokeyService {
     }
 
 }
+
+
