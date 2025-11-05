@@ -3,14 +3,18 @@ package com.robokey.fw.service;
 import com.robokey.fw.model.Status;
 import com.robokey.fw.model.EnviarSegredoRequest;
 import com.robokey.fw.model.Ponto;
+import com.robokey.fw.model.RespostaProgresso;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import com.fazecast.jSerialComm.SerialPort;
 import jakarta.annotation.PreDestroy;
 import java.io.OutputStream;
+import java.rmi.server.ExportException;
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,6 +31,13 @@ public class RobokeyService {
     private SerialPort portaSerial;
     private OutputStream saidaSerial;
     private InputStream entradaSerial;
+
+    private final Object serialLock = new Object();
+
+    private volatile String ultimoERRO = null;
+
+    private volatile boolean respostaOkRecebida = false;
+    private volatile boolean respostaErrorRecebida = false;
 
     // Esses identificadores devem garantir que qualquer placa com STM32 seja detectada pela USB
     // no entanto não basta detectar a placa, para estabelecer conexão o protocolo deve ser implementado.
@@ -63,6 +74,8 @@ public class RobokeyService {
                     this.statusAtual = Status.Espera;
                     this.saidaSerial = portaSerial.getOutputStream();
                     this.entradaSerial = portaSerial.getInputStream();
+
+                    iniciarThreadDeLeitura();
                     break;
                 }
                 else
@@ -70,10 +83,98 @@ public class RobokeyService {
                     System.err.println("Falha ao abrir a porta(talvez em uso ? ) tentando novamente em 3s");
                     this.portaSerial = null;
                 }
+            }
+        }
+    }
 
+    private void iniciarThreadDeLeitura()
+    {
+        Thread threadOuvinte = new Thread( () ->{
+            System.out.println("Thread de Leitura: Iniciada");
+            BufferedReader reader = new BufferedReader(new InputStreamReader(this.entradaSerial));
+            while(portaSerial!= null && portaSerial.isOpen())
+            {
+                String linha = null;
+                try{
+                    linha = reader.readLine();
+                }
+                catch(InterruptedIOException timeout)
+                {
+                    continue;
+                }
+                catch(IOException e)
+                {
+                    System.out.println("Thread de Leitura: Erro de IO: "+e.getMessage());
+                    break;
+                }
+                if(linha != null)
+                {
+                    interpretadorDeLinhaUSB(linha.trim());
+                }
+            }
+
+            System.out.println("Thread de Leitura: Morreu");
+            synchronized(serialLock){
+                respostaErrorRecebida = true;
+                serialLock.notifyAll();
+            }
+        });
+
+        threadOuvinte.setDaemon(true);
+        threadOuvinte.start();
+    }
+
+    private void interpretadorDeLinhaUSB(String linha)
+    {
+        System.out.println("<< "+linha);
+
+        if(linha.contains("OK:"))
+        {
+            synchronized(serialLock){
+                respostaOkRecebida = true;
+                serialLock.notify();
+            }
+            return;
+        }
+
+        if(linha.contains("ERROR:"))
+        {
+            synchronized(serialLock)
+            {
+                respostaErrorRecebida = true;
+                serialLock.notify();
+            }
+        }
+
+        if(linha.startsWith("PROG:"))
+        {
+            try{
+                int p = Integer.parseInt(linha.substring(6).trim());
+                this.progresso.set(p);
+            }
+            catch(Exception e)
+            {
+                System.err.println("Erro ao interpretar o progresso: "+e);
             }
 
         }
+
+        if(linha.startsWith("ERROR:"))
+        {
+            try{
+                String msgErro = linha.substring(7).trim();
+                this.ultimoERRO =msgErro;
+                System.err.println("ERRO ASSINCRONO DA PLACA: "+msgErro);
+                /**
+                 * @todo : Mudar modo ?
+                 */
+            }
+            catch(Exception e)
+            {
+                System.err.println("Erro ao fazer parse da mensagem de erro: " + e.getMessage());
+            }
+        }
+
     }
 
     public Status getStatus() {
@@ -130,6 +231,8 @@ public class RobokeyService {
         return true;
 
     }
+
+
     private boolean enviarEEsperarOk(String comando)
     {
         if(portaSerial == null || saidaSerial == null || entradaSerial == null)
@@ -139,63 +242,62 @@ public class RobokeyService {
             return false;
         }
 
-        System.out.println(">> Enviando: " + comando);
+        System.out.println(">> " + comando);
 
-        try
+        synchronized(serialLock)
         {
-            // Limpa o buffer 
-            while(entradaSerial.available() > 0)
-                entradaSerial.read();
+            this.respostaErrorRecebida = false;
+            this.respostaOkRecebida = false;
 
-            saidaSerial.write((comando + "\n").getBytes());
-            saidaSerial.flush();
-
-        }
-        catch(Exception e)
-        {
-            System.err.println("Falha crítica ao ESCREVER na porta");
-            e.printStackTrace(); // imprime o erro completo no console
-            this.statusAtual = Status.ConectandoUSB;
-            this.portaSerial = null;
-            return false;
-        }
-
-        BufferedReader reader = new BufferedReader(new InputStreamReader(this.entradaSerial));
-        long startTime= System.currentTimeMillis();
-
-        try
-        {
-            while(System.currentTimeMillis() - startTime < (COMMAND_TIMEOUT_S*1000) )
+            try
             {
-                String linha = reader.readLine();
+                // Limpa o buffer 
+                while(entradaSerial.available() > 0)
+                    entradaSerial.read();
 
-                if(linha != null)
+                saidaSerial.write((comando + "\n").getBytes());
+                saidaSerial.flush();
+
+            }
+            catch(Exception e)
+            {
+                System.err.println("Falha crítica ao ESCREVER na porta");
+                e.printStackTrace(); // imprime o erro completo no console
+                this.statusAtual = Status.ConectandoUSB;
+                this.portaSerial = null;
+                return false;
+            }
+
+            long tempoParaTerminar = System.currentTimeMillis()+(1000*COMMAND_TIMEOUT_S);
+
+            try{
+                while(!respostaOkRecebida && !respostaErrorRecebida)
                 {
-                    linha = linha.trim();
-                    System.out.println("   <<" + linha);
-                    if(linha.contains("OK:"))
-                        return true;
-                    if(linha.contains("ERROR:"))
+                    long tempoRestante = tempoParaTerminar- System.currentTimeMillis();
+                    if(tempoRestante <= 0)
                     {
-                        System.out.println("  Firmware reportou erro" + linha);
+                        System.err.println("Timeout: OK não recebido");
                         return false;
-
                     }
+
+                    System.out.println("...(aguardando OK da placa, T-" + tempoRestante + "ms)....");
+                    serialLock.wait(tempoRestante);
+
                 }
+
+                if(respostaOkRecebida)
+                    return true;
+                if(respostaErrorRecebida)
+                    return false;
+            }catch(InterruptedException e)
+            {
+                System.err.println("Thread de envio interrompida durante a epsera: "+ e.getMessage());
+                return false;
             }
         }
-        catch(java.io.IOError | java.io.IOException e)
-        {
-            System.err.println("Exceção ao LER da porta (placa desconectada ?)" + e.getMessage());
-            this.statusAtual = Status.ConectandoUSB;
-            this.portaSerial = null;
-            return false;
-        }
-        System.err.println("    Timeout! 'OK:' não recebido em " + COMMAND_TIMEOUT_S + "s.");
-
         return false;
-    }
 
+    }
 
     public void pausarMaquina() {
         operacao = false;
@@ -203,10 +305,22 @@ public class RobokeyService {
     }
 
     public void iniciar() {
+        this.ultimoERRO = null;
+        this.progresso.set(0);
+
         operacao = true;
+        boolean sucesso = enviarEEsperarOk("START PROCESSING");
+        if(!sucesso)
+        {
+            System.err.println("Falha ao iniciar operação na placa.");
+            operacao = false;
+            statusAtual = Status.Espera;
+            return;
+        }
         statusAtual = Status.Operacao;
-        progresso.set(0); // Zera progresso
-        iniciarProgresso(); // Inicia thread de progresso
+       // progresso.set(0);
+        //iniciarProgresso();
+
     }
 
     public void retomar() {
@@ -215,8 +329,11 @@ public class RobokeyService {
         iniciarProgresso(); // reinicia progresso se pausado
     }
 
-    public String progresso() {
-        return progresso.get() + "%";
+    public RespostaProgresso progresso() {
+        String erro = this.ultimoERRO;
+        this.ultimoERRO = null;
+        return new RespostaProgresso(this.progresso.get(), erro);
+        //return progresso.get() + "%";
     }
 
     public void movChaveDireita() {
@@ -247,6 +364,7 @@ public class RobokeyService {
             System.out.println("Porta serial fechada.");
         }
     }
+
 
     private void iniciarProgresso() {
         Thread progressoThread = new Thread(() -> {

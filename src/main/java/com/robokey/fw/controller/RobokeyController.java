@@ -1,6 +1,7 @@
 package com.robokey.fw.controller;
 
 import com.robokey.fw.model.EnviarSegredoRequest;
+import com.robokey.fw.model.RespostaProgresso;
 import com.robokey.fw.model.Status;
 import com.robokey.fw.service.RobokeyService;
 import org.springframework.web.bind.annotation.*;
@@ -41,7 +42,7 @@ public class RobokeyController {
     }
 
     @GetMapping("/progresso")
-    public String progresso() {
+    public RespostaProgresso progresso() {
         return service.progresso();
     }
 
