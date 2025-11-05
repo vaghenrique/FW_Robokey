@@ -1,44 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
-
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.robokey</groupId>
-    <artifactId>FW_Robokey</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
-    <packaging>jar</packaging>
-    <name>FW_Robokey</name>
-    <description>Aplicação Spring Boot Robokey</description>
 
+    <!-- Define o "pai" - é o Spring Boot que gerencia as versões -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>3.2.5</version>
-        <relativePath/>
+        <relativePath/> <!-- lookup parent from repository -->
     </parent>
 
+    <!-- Suas informações de projeto -->
+    <groupId>com.robokey</groupId>
+    <artifactId>FW_Robokey</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>FW_Robokey</name>
+    <description>Aplicação Spring Boot Robokey</description>
+
     <properties>
+        <!-- Garante que está usando a versão 17 do Java -->
         <java.version>17</java.version>
     </properties>
 
     <dependencies>
-    
+        <!-- 1. Para a API Web e servidor Tomcat embutido -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-            </dependency>
+        </dependency>
 
+        <!-- 2. Para comunicação com a porta serial (STM32) -->
         <dependency>
             <groupId>com.fazecast</groupId>
             <artifactId>jSerialComm</artifactId>
             <version>2.10.4</version>
         </dependency>
 
+        <!-- 3. Para o Swagger (OpenAPI) - A página de documentação -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.5.0</version> <!-- Versão estável recente -->
+        </dependency>
+        
+        <!-- 4. O FIX para o @PreDestroy (que saiu do Java 11+) -->
+        <!-- Isto corrige o erro 'NoClassDefFoundError' para 'jakarta/annotation/PreDestroy' -->
+        <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>
         <plugins>
+            <!-- Plugin para "empacotar" tudo num .jar executável -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -46,3 +64,4 @@
         </plugins>
     </build>
 </project>
+
