@@ -38,6 +38,10 @@ public class RobokeyService {
 
     private volatile boolean respostaOkRecebida = false;
     private volatile boolean respostaErrorRecebida = false;
+    private volatile boolean vstatusRecebido = false;
+
+
+    private volatile boolean chaveInserida = false;
 
     // Esses identificadores devem garantir que qualquer placa com STM32 seja detectada pela USB
     // no entanto não basta detectar a placa, para estabelecer conexão o protocolo deve ser implementado.
@@ -172,6 +176,16 @@ public class RobokeyService {
             catch(Exception e)
             {
                 System.err.println("Erro ao fazer parse da mensagem de erro: " + e.getMessage());
+            }
+        }
+
+        if(linha.startsWith("VSTATUS:"))
+        {
+            System.out.println("VSTATUS recebido, totem em modo validação");
+
+            synchronized(serialLock){
+                vstatusRecebido = true;
+                serialLock.notifyAll();
             }
         }
 
@@ -323,6 +337,112 @@ public class RobokeyService {
 
     }
 
+    public void lerSegredo() {
+
+        if(!isPronto())
+        {
+            System.err.println("Comando: 'lerSegredo' ignorado: Placa não conectada");
+            return;
+        }
+
+        this.ultimoERRO = null;
+        System.out.println("Iniciando leitura de segredo na placa...");
+
+        Thread leituraThread = new Thread( () -> {
+            boolean comandoAceite = enviarEEsperarOk("START READING_SECRET");
+            if(!comandoAceite)
+            {
+                System.err.println("Falha ao iniciar leitura de segredo na placa.");
+                operacao = false;
+                statusAtual = Status.Espera;
+                return;
+            }
+
+            statusAtual = Status.AguardandoInsercaoChave;
+
+            if (esperarPorVStatus(300)) { // Espera até 120 segundos (2 minutos)
+                
+                System.out.println("VSTATUS recebido com sucesso! Prosseguindo...");
+                
+                this.statusAtual = Status.ValidandoChave; 
+
+            } else {
+                // Timeout esperando a chave
+                System.err.println("Timeout: 'VSTATUS:' não recebido após 300s.");
+                this.statusAtual = Status.Espera;
+            }
+
+        });
+
+        leituraThread.setDaemon(true);
+        leituraThread.start();
+
+    }
+
+    public void girarGraus(double graus) {
+        
+        if (!isPronto()) {
+            System.err.println("Comando 'girarGraus' ignorado: Placa não conectada.");
+            return;
+        }
+
+        if (this.statusAtual != Status.ValidandoChave) {
+            System.err.println("Comando 'girarGraus' ignorado: Máquina não está em modo de validação.");
+            return; 
+        }
+
+        final double grausParaGirar = graus;
+
+        Thread giroThread = new Thread(() -> {
+
+            if(grausParaGirar > 999.9f)
+            {
+                boolean sucesso = enviarEEsperarOk("STOP READING_SECRET");
+
+                if (sucesso) {
+                    System.out.println("Comando 'STOP READING_SECRET' enviado com sucesso.");
+                    this.statusAtual = Status.Espera;
+                }
+            }
+            else
+            {
+                String comando = String.format(Locale.US, "MTA %.2f", grausParaGirar);
+                
+                 enviarEEsperarOk(comando);
+
+            }
+
+        });
+        
+        giroThread.setDaemon(true);
+        giroThread.start();
+    }
+
+
+    /**
+     * Helper: Bloqueia a thread até receber "VSTATUS:" ou estourar o timeout.
+     */
+    private boolean esperarPorVStatus(int timeoutSegundos) {
+        synchronized (serialLock) {
+            this.vstatusRecebido = false; // Reseta o flag
+            long tempoLimite = System.currentTimeMillis() + (timeoutSegundos * 1000);
+
+            try {
+                while (!vstatusRecebido) {
+                    long tempoRestante = tempoLimite - System.currentTimeMillis();
+                    if (tempoRestante <= 0) {
+                        return false; // Timeout
+                    }
+                    serialLock.wait(tempoRestante);
+                }
+                return true; 
+            } catch (InterruptedException e) {
+                System.err.println("Espera por VSTATUS interrompida.");
+                return false;
+            }
+        }
+    }
+
     public void retomar() {
         operacao = true;
         statusAtual = Status.Operacao;
@@ -336,16 +456,9 @@ public class RobokeyService {
         //return progresso.get() + "%";
     }
 
-    public void movChaveDireita() {
-        System.out.println("Movendo chave para a direita");
-    }
 
-    public void movChaveEsquerda() {
-        System.out.println("Movendo chave para a esquerda");
-    }
-
-    public void chaveInserida() {
-        statusAtual = Status.ChaveON;
+    public boolean chaveInserida() {
+        return chaveInserida;
     }
 
     // so garante que ja conectou a USB

@@ -36,6 +36,11 @@ public class RobokeyController {
         service.iniciar();
     }
 
+    @PostMapping("/lerSegredo")
+    public void lerSegredo() {
+        service.lerSegredo();
+    }
+
     @PostMapping("/retomar")
     public void retomar() {
         service.retomar();
@@ -46,18 +51,13 @@ public class RobokeyController {
         return service.progresso();
     }
 
-    @PostMapping("/movDireita")
-    public void movChaveDireita() {
-        service.movChaveDireita();
-    }
-
-    @PostMapping("/movEsquerda")
-    public void movChaveEsquerda() {
-        service.movChaveEsquerda();
-    }
-
     @GetMapping("/chaveInserida")
-    public void chaveInserida() {
-        service.chaveInserida();
+    public boolean chaveInserida() {
+        return service.chaveInserida();
+    }
+
+    @PostMapping("/movGraus")
+    public void girarGraus(@RequestParam double graus) {
+        service.girarGraus(graus);
     }
 }
